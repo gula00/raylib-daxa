@@ -56,6 +56,31 @@ endif ()
 # Produces a variable LIBS_PRIVATE that will be used later
 include(LibraryConfigurations)
 
+if (RAYLIB_USE_DAXA)
+    enable_language(CXX)
+    include(FetchContent)
+
+    set(DAXA_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(DAXA_ENABLE_UTILS_FSR2 OFF CACHE BOOL "" FORCE)
+    set(DAXA_ENABLE_UTILS_IMGUI OFF CACHE BOOL "" FORCE)
+    set(DAXA_ENABLE_UTILS_MEM OFF CACHE BOOL "" FORCE)
+    set(DAXA_ENABLE_UTILS_PIPELINE_MANAGER_GLSLANG OFF CACHE BOOL "" FORCE)
+    set(DAXA_ENABLE_UTILS_PIPELINE_MANAGER_SLANG OFF CACHE BOOL "" FORCE)
+    set(DAXA_ENABLE_UTILS_PIPELINE_MANAGER_SPIRV_VALIDATION OFF CACHE BOOL "" FORCE)
+    set(DAXA_ENABLE_UTILS_TASK_GRAPH OFF CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(
+        daxa
+        GIT_REPOSITORY https://github.com/Ipotrick/Daxa.git
+        GIT_TAG        c4e7eaee588893e08a5316f543e16dcfc8f6bc21
+        GIT_SHALLOW    TRUE
+        GIT_PROGRESS   TRUE
+    )
+    FetchContent_MakeAvailable(daxa)
+
+    list(APPEND raylib_sources rdaxa.cpp rdaxa.h)
+endif()
+
 if (DEFINED SUPPORT_MODULE_RAUDIO AND NOT SUPPORT_MODULE_RAUDIO)
     MESSAGE(STATUS "Audio Backend: None (-DCUSTOMIZE_BUILD=ON -DSUPPORT_MODULE_RAUDIO=OFF)")
 else ()
@@ -106,6 +131,14 @@ endif ()
 
 target_link_libraries(raylib PRIVATE $<BUILD_INTERFACE:${LIBS_PRIVATE}>)
 target_link_libraries(raylib PUBLIC ${LIBS_PUBLIC})
+if (RAYLIB_USE_DAXA)
+    target_link_libraries(raylib PRIVATE $<BUILD_INTERFACE:daxa::daxa>)
+    set_source_files_properties(rdaxa.cpp PROPERTIES LANGUAGE CXX)
+    set_target_properties(raylib PROPERTIES
+                          CXX_STANDARD 20
+                          CXX_STANDARD_REQUIRED ON
+                          CXX_EXTENSIONS OFF)
+endif()
 
 # Sets some compile time definitions for the pre-processor
 # If CUSTOMIZE_BUILD option is on you will not use config.h by default

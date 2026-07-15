@@ -75,6 +75,10 @@
     #include <GL/gl.h>
 #endif
 
+#if defined(GRAPHICS_API_DAXA)
+    #include "rdaxa.h"
+#endif
+
 //----------------------------------------------------------------------------------
 // Types and Structures Definition
 //----------------------------------------------------------------------------------
@@ -1222,9 +1226,16 @@ void SwapScreenBuffer(void)
     // Update framebuffer
     rlCopyFramebuffer(0, 0, CORE.Window.render.width, CORE.Window.render.height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, platform.pixels);
 
+#if defined(GRAPHICS_API_DAXA)
+    if (!rdaxaPresent(platform.pixels, CORE.Window.render.width, CORE.Window.render.height))
+    {
+        TRACELOG(LOG_WARNING, "DAXA: Failed to present software framebuffer");
+    }
+#else
     // Force redraw
     InvalidateRect(platform.hwnd, NULL, FALSE);
     UpdateWindow(platform.hwnd);
+#endif
 #else
     if (!SwapBuffers(platform.hdc)) TRACELOG(LOG_ERROR, "WIN32: Failed to swap buffers [ERROR: %lu]", GetLastError());
     if (!ValidateRect(platform.hwnd, NULL)) TRACELOG(LOG_ERROR, "WIN32: Failed to validate screen rect [ERROR: %lu]", GetLastError());
@@ -1632,6 +1643,14 @@ int InitPlatform(void)
 
         SelectObject(platform.hdcmem, platform.hbitmap);
 
+#if defined(GRAPHICS_API_DAXA)
+        if (!rdaxaInit(platform.hwnd, platform.appScreenWidth, platform.appScreenHeight))
+        {
+            TRACELOG(LOG_ERROR, "DAXA: Failed to initialize presentation backend");
+            return -1;
+        }
+#endif
+
         //ReleaseDC(platform.hwnd, platform.hdc); // Required?
     }
     else
@@ -1691,6 +1710,10 @@ int InitPlatform(void)
 // Close platform
 void ClosePlatform(void)
 {
+#if defined(GRAPHICS_API_DAXA)
+    rdaxaShutdown();
+#endif
+
     if (platform.hwnd)
     {
         int result = DestroyWindow(platform.hwnd);

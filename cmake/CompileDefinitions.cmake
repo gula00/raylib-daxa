@@ -1,6 +1,9 @@
 # Adding compile definitions
 target_compile_definitions("raylib" PUBLIC "${PLATFORM_CPP}")
 target_compile_definitions("raylib" PUBLIC "${GRAPHICS}")
+if(RAYLIB_USE_DAXA)
+    target_compile_definitions("raylib" PUBLIC GRAPHICS_API_DAXA)
+endif()
 
 function(define_if target variable)
     if(${${variable}})

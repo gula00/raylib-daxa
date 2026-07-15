@@ -37,6 +37,12 @@ endif()
 # Main sources directory (the second parameter sets the output directory name to raylib)
 add_subdirectory(src raylib)
 
+if (WIN32 AND "${OPENGL_VERSION}" STREQUAL "Daxa")
+  add_executable(raylib_daxa_smoke tests/daxa_smoke.c)
+  target_link_libraries(raylib_daxa_smoke PRIVATE raylib)
+  add_test(NAME raylib_daxa_smoke COMMAND raylib_daxa_smoke)
+endif()
+
 # Uninstall target, only create when building raylib by itself
 # Avoid conflicting target names when using raylib with other libraries
 if(NOT TARGET uninstall AND PROJECT_IS_TOP_LEVEL)
