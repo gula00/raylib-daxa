@@ -149,6 +149,7 @@
 
 // Security check in case no GRAPHICS_API_OPENGL_* defined
 #if !defined(GRAPHICS_API_OPENGL_SOFTWARE) && \
+    !defined(GRAPHICS_API_DAXA) && \
     !defined(GRAPHICS_API_OPENGL_11) && \
     !defined(GRAPHICS_API_OPENGL_21) && \
     !defined(GRAPHICS_API_OPENGL_33) && \
@@ -172,6 +173,14 @@
     #if defined(GRAPHICS_API_OPENGL_ES2)
         #undef GRAPHICS_API_OPENGL_ES2
     #endif
+#endif
+
+// Daxa currently reuses the software raster path while owning presentation.
+// This keeps GRAPHICS_API_DAXA independent from public OpenGL backend selection
+// while the native Daxa rlgl renderer is brought up incrementally.
+#if defined(GRAPHICS_API_DAXA)
+    #define GRAPHICS_API_DAXA_SOFTWARE_RASTER
+    #define GRAPHICS_API_OPENGL_11
 #endif
 
 // Software implementation uses OpenGL 1.1 functionality
@@ -430,6 +439,7 @@ typedef struct rlRenderBatch {
 // OpenGL version
 typedef enum {
     RL_OPENGL_SOFTWARE = 0,  // Software rendering
+    RL_DAXA,                 // Daxa rendering
     RL_OPENGL_11,               // OpenGL 1.1
     RL_OPENGL_21,               // OpenGL 2.1 (GLSL 120)
     RL_OPENGL_33,               // OpenGL 3.3 (GLSL 330)
@@ -841,7 +851,7 @@ RLAPI void rlLoadDrawQuad(void);     // Load and draw a quad
 #endif
 
 #if defined(GRAPHICS_API_OPENGL_11)
-    #if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+    #if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
         #define RLSW_IMPLEMENTATION
         #define SW_MALLOC(sz) RL_MALLOC(sz)
         #define SW_CALLOC(n,sz) RL_CALLOC(n, sz)
@@ -1838,7 +1848,7 @@ void rlDisableShader(void)
 // Enable rendering to texture (fbo)
 void rlEnableFramebuffer(unsigned int id)
 {
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     glBindFramebuffer(GL_FRAMEBUFFER, id);
 #endif
 }
@@ -1847,7 +1857,7 @@ void rlEnableFramebuffer(unsigned int id)
 unsigned int rlGetActiveFramebuffer(void)
 {
     GLint fboId = 0;
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES3) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES3) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &fboId);
 #endif
     return fboId;
@@ -1856,7 +1866,7 @@ unsigned int rlGetActiveFramebuffer(void)
 // Disable rendering to texture
 void rlDisableFramebuffer(void)
 {
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 #endif
 }
@@ -1872,7 +1882,7 @@ void rlBlitFramebuffer(int srcX, int srcY, int srcWidth, int srcHeight, int dstX
 // Bind framebuffer object (fbo)
 void rlBindFramebuffer(unsigned int target, unsigned int framebuffer)
 {
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     glBindFramebuffer(target, framebuffer);
 #endif
 }
@@ -2305,7 +2315,7 @@ void rlglInit(int width, int height)
     RLGL.State.currentMatrix = &RLGL.State.modelview;
 #endif // GRAPHICS_API_OPENGL_33 || GRAPHICS_API_OPENGL_ES2
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
     // Initialize software renderer backend
     int result = swInit(width, height);
     if (result == 0)
@@ -2367,7 +2377,7 @@ void rlglClose(void)
     TRACELOG(RL_LOG_INFO, "TEXTURE: [ID %i] Default texture unloaded successfully", RLGL.State.defaultTextureId);
 #endif
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
     swClose(); // Unload sofware renderer resources
 #endif
     isGpuReady = false;
@@ -2682,7 +2692,9 @@ int rlGetVersion(void)
 {
     int glVersion = 0;
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_DAXA)
+    glVersion = RL_DAXA;
+#elif defined(GRAPHICS_API_OPENGL_SOFTWARE)
     glVersion = RL_OPENGL_SOFTWARE;
 #elif defined(GRAPHICS_API_OPENGL_11)
     glVersion = RL_OPENGL_11;
@@ -3459,7 +3471,7 @@ unsigned int rlLoadTextureDepth(int width, int height, bool useRenderBuffer)
 
         TRACELOG(RL_LOG_INFO, "TEXTURE: [ID %i] Depth renderbuffer loaded successfully (%i bits)", id, (RLGL.ExtSupported.maxDepthBits >= 24)? RLGL.ExtSupported.maxDepthBits : 16);
     }
-#elif defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#elif defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
     // NOTE: Renderbuffers are the same type of object as textures in rlsw
     // WARNING: Ensure that the depth format is the one specified at rlsw compilation
     glGenRenderbuffers(1, &id);
@@ -3773,7 +3785,7 @@ void *rlReadTexturePixels(unsigned int id, int width, int height, int format)
 // Copy framebuffer pixel data to internal buffer
 void rlCopyFramebuffer(int x, int y, int width, int height, int format, void *pixels)
 {
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
     unsigned int glInternalFormat, glFormat, glType;
     rlGetGlTextureFormats(format, &glInternalFormat, &glFormat, &glType); // Get OpenGL texture format
     swReadPixels(x, y, width, height, glFormat, glType, pixels);
@@ -3783,7 +3795,7 @@ void rlCopyFramebuffer(int x, int y, int width, int height, int format, void *pi
 // Resize internal framebuffer
 void rlResizeFramebuffer(int width, int height)
 {
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
     swResize(width, height);
 #endif
 }
@@ -3834,7 +3846,7 @@ unsigned int rlLoadFramebuffer(void)
     unsigned int fboId = 0;
     if (!isGpuReady) { TRACELOG(RL_LOG_WARNING, "GL: GPU is not ready to load data, trying to load before InitWindow()?"); return fboId; }
 
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     glGenFramebuffers(1, &fboId);         // Create the framebuffer object
     glBindFramebuffer(GL_FRAMEBUFFER, 0); // Unbind any framebuffer
 #endif
@@ -3846,7 +3858,7 @@ unsigned int rlLoadFramebuffer(void)
 // NOTE: Attach type: 0-Color, 1-Depth renderbuffer, 2-Depth texture
 void rlFramebufferAttach(unsigned int id, unsigned int texId, int attachType, int texType, int mipLevel)
 {
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     glBindFramebuffer(GL_FRAMEBUFFER, id);
 
     switch (attachType)
@@ -3886,7 +3898,7 @@ bool rlFramebufferComplete(unsigned int id)
 {
     bool result = false;
 
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     glBindFramebuffer(GL_FRAMEBUFFER, id);
 
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -3917,7 +3929,7 @@ bool rlFramebufferComplete(unsigned int id)
 // NOTE: All attached textures/cubemaps/renderbuffers are also deleted
 void rlUnloadFramebuffer(unsigned int id)
 {
-#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE))
+#if (defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER))
     // Query depth attachment to automatically delete texture/renderbuffer
     int depthType = 0;
     glBindFramebuffer(GL_FRAMEBUFFER, id);   // Bind framebuffer to query depth texture type

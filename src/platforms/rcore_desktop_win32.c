@@ -71,8 +71,9 @@
 
 #include <malloc.h>          // Required for alloca()
 
-#if !defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if !defined(GRAPHICS_API_OPENGL_SOFTWARE) && !defined(GRAPHICS_API_DAXA)
     #include <GL/gl.h>
+    #define WIN32_USE_WGL
 #endif
 
 #if defined(GRAPHICS_API_DAXA)
@@ -103,11 +104,13 @@ typedef struct {
     LARGE_INTEGER timerFrequency;
 } PlatformData;
 
-// Define WGL function pointer types (no wglext.h needed)
-typedef HGLRC (WINAPI *PFNWGLCREATECONTEXTATTRIBSARBPROC)(HDC, HGLRC, const int *);
-typedef BOOL (WINAPI *PFNWGLCHOOSEPIXELFORMATARBPROC)(HDC, const int *, const FLOAT *, UINT, int *, UINT *);
-typedef BOOL (WINAPI *PFNWGLSWAPINTERVALEXTPROC)(int);
-typedef const char *(WINAPI *PFNWGLGETEXTENSIONSSTRINGARBPROC)(HDC hdc);
+#if defined(WIN32_USE_WGL)
+    // Define WGL function pointer types (no wglext.h needed)
+    typedef HGLRC (WINAPI *PFNWGLCREATECONTEXTATTRIBSARBPROC)(HDC, HGLRC, const int *);
+    typedef BOOL (WINAPI *PFNWGLCHOOSEPIXELFORMATARBPROC)(HDC, const int *, const FLOAT *, UINT, int *, UINT *);
+    typedef BOOL (WINAPI *PFNWGLSWAPINTERVALEXTPROC)(int);
+    typedef const char *(WINAPI *PFNWGLGETEXTENSIONSSTRINGARBPROC)(HDC hdc);
+#endif
 
 //----------------------------------------------------------------------------------
 // Global Variables Definition
@@ -116,11 +119,13 @@ extern CoreData CORE;                   // Global CORE state context
 
 static PlatformData platform = { 0 };   // Platform specific data
 
-// Required WGL functions
-static PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribsARB = NULL;
-static PFNWGLCHOOSEPIXELFORMATARBPROC wglChoosePixelFormatARB = NULL;
-static PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT = NULL;
-static PFNWGLGETEXTENSIONSSTRINGARBPROC wglGetExtensionsStringARB = NULL;
+#if defined(WIN32_USE_WGL)
+    // Required WGL functions
+    static PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribsARB = NULL;
+    static PFNWGLCHOOSEPIXELFORMATARBPROC wglChoosePixelFormatARB = NULL;
+    static PFNWGLSWAPINTERVALEXTPROC wglSwapIntervalEXT = NULL;
+    static PFNWGLGETEXTENSIONSSTRINGARBPROC wglGetExtensionsStringARB = NULL;
+#endif
 
 // --------------------------------------------------------------------------------
 // This part of the file contains pure functions that never access global state
@@ -460,29 +465,31 @@ static BOOL IsWindows10Version1703OrGreaterWin32(void)
     return 0 == (*Verify)(&osvi, VER_MAJORVERSION | VER_MINORVERSION | VER_BUILDNUMBER, cond);
 }
 
-// Get OpenGL function pointers
-static void *WglGetProcAddress(const char *procname)
-{
-    void *proc = (void *)wglGetProcAddress(procname);
-
-    if ((proc == NULL) ||
-        // NOTE: Some GPU drivers could return following
-        // invalid sentinel values instead of NULL
-        (proc == (void *)0x1) ||
-        (proc == (void *)0x2) ||
-        (proc == (void *)0x3) ||
-        (proc == (void *)-1))
+#if defined(WIN32_USE_WGL)
+    // Get OpenGL function pointers
+    static void *WglGetProcAddress(const char *procname)
     {
-        // TODO: Keep gl module pointer as global platform data?
-        HMODULE glModule = LoadLibraryW(L"opengl32.dll");
-        proc = (void *)GetProcAddress(glModule, procname);
+        void *proc = (void *)wglGetProcAddress(procname);
 
-        //if (proc == NULL) TRACELOG(LOG_ERROR, "GL: GetProcAddress() failed to get %s [%p], error=%u", procname, proc, GetLastError());
-        //else TRACELOG(LOG_INFO, "GL: Found entry point for %s [%p]", procname, proc);
+        if ((proc == NULL) ||
+            // NOTE: Some GPU drivers could return following
+            // invalid sentinel values instead of NULL
+            (proc == (void *)0x1) ||
+            (proc == (void *)0x2) ||
+            (proc == (void *)0x3) ||
+            (proc == (void *)-1))
+        {
+            // TODO: Keep gl module pointer as global platform data?
+            HMODULE glModule = LoadLibraryW(L"opengl32.dll");
+            proc = (void *)GetProcAddress(glModule, procname);
+
+            //if (proc == NULL) TRACELOG(LOG_ERROR, "GL: GetProcAddress() failed to get %s [%p], error=%u", procname, proc, GetLastError());
+            //else TRACELOG(LOG_INFO, "GL: Found entry point for %s [%p]", procname, proc);
+        }
+
+        return proc;
     }
-
-    return proc;
-}
+#endif
 
 // Get key from wparam (mapping)
 static KeyboardKey GetKeyFromWparam(WPARAM wparam)
@@ -801,8 +808,10 @@ static void UpdateWindowStyle(HWND hwnd, unsigned desiredFlags);
 static unsigned SanitizeFlags(int mode, unsigned flags);
 static void UpdateFlags(HWND hwnd, unsigned desiredFlags, int width, int height); // Update window flags
 
-// Check if OpenGL extension is available
-static bool IsWglExtensionAvailable(HDC hdc, const char *extension);
+#if defined(WIN32_USE_WGL)
+    // Check if OpenGL extension is available
+    static bool IsWglExtensionAvailable(HDC hdc, const char *extension);
+#endif
 
 //----------------------------------------------------------------------------------
 // Module Functions Declaration
@@ -1222,20 +1231,21 @@ void SwapScreenBuffer(void)
 {
     if (!platform.hdc) abort();
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_DAXA)
     // Update framebuffer
     rlCopyFramebuffer(0, 0, CORE.Window.render.width, CORE.Window.render.height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, platform.pixels);
 
-#if defined(GRAPHICS_API_DAXA)
     if (!rdaxaPresent(platform.pixels, CORE.Window.render.width, CORE.Window.render.height))
     {
         TRACELOG(LOG_WARNING, "DAXA: Failed to present software framebuffer");
     }
-#else
+#elif defined(GRAPHICS_API_OPENGL_SOFTWARE)
+    // Update framebuffer
+    rlCopyFramebuffer(0, 0, CORE.Window.render.width, CORE.Window.render.height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, platform.pixels);
+
     // Force redraw
     InvalidateRect(platform.hwnd, NULL, FALSE);
     UpdateWindow(platform.hwnd);
-#endif
 #else
     if (!SwapBuffers(platform.hdc)) TRACELOG(LOG_ERROR, "WIN32: Failed to swap buffers [ERROR: %lu]", GetLastError());
     if (!ValidateRect(platform.hwnd, NULL)) TRACELOG(LOG_ERROR, "WIN32: Failed to validate screen rect [ERROR: %lu]", GetLastError());
@@ -1379,144 +1389,146 @@ void PollInputEvents(void)
 // Module Internal Functions Definition
 //----------------------------------------------------------------------------------
 
-// Initialize modern OpenGL context
-// NOTE: Creating a dummy context first to query required extensions
-HGLRC InitOpenGL(HWND hwnd, HDC hdc)
-{
-    // First, create a dummy context to get WGL extensions
-    PIXELFORMATDESCRIPTOR pixelFormatDesc = {
-        .nSize = sizeof(PIXELFORMATDESCRIPTOR),
-        .nVersion = 1,
-        .dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
-        .iPixelType = PFD_TYPE_RGBA,
-        .cColorBits = 32,
-        .cAlphaBits = 8,
-        .cDepthBits = 24,
-        .iLayerType = PFD_MAIN_PLANE
-    };
-
-    int pixelFormat = ChoosePixelFormat(hdc, &pixelFormatDesc);
-    SetPixelFormat(hdc, pixelFormat, &pixelFormatDesc);
-    //int pixelFormat = ChoosePixelFormat(platform.hdc, &pixelFormatDesc);
-    //if (!pixelFormat) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "ChoosePixelFormat", GetLastError()); return -1; }
-    //if (!SetPixelFormat(platform.hdc, pixelFormat, &pixelFormatDesc)) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "SetPixelFormat", GetLastError()); return -1; }
-
-    HGLRC tempContext = wglCreateContext(hdc);
-    //if (!tempContext) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "wglCreateContext", GetLastError()); return -1; }
-    BOOL result = wglMakeCurrent(hdc, tempContext);
-    //if (!result) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "wglMakeCurrent", GetLastError()); return -1; }
-
-    // Load WGL extension entry points
-    wglCreateContextAttribsARB = (PFNWGLCREATECONTEXTATTRIBSARBPROC)wglGetProcAddress("wglCreateContextAttribsARB");
-    wglChoosePixelFormatARB = (PFNWGLCHOOSEPIXELFORMATARBPROC)wglGetProcAddress("wglChoosePixelFormatARB");
-    wglSwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
-    wglGetExtensionsStringARB = (PFNWGLGETEXTENSIONSSTRINGARBPROC)wglGetProcAddress("wglGetExtensionsStringARB");
-
-    // Setup modern pixel format if extension is available
-    if (wglChoosePixelFormatARB)
+#if defined(WIN32_USE_WGL)
+    // Initialize modern OpenGL context
+    // NOTE: Creating a dummy context first to query required extensions
+    HGLRC InitOpenGL(HWND hwnd, HDC hdc)
     {
-        int pixelFormatAttribs[] = {
-            WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB,
-            WGL_DRAW_TO_WINDOW_ARB, GL_TRUE,
-            WGL_SUPPORT_OPENGL_ARB, GL_TRUE,
-            WGL_DOUBLE_BUFFER_ARB, GL_TRUE,
-            WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
-            WGL_COLOR_BITS_ARB, 32,
-            //WGL_RED_BITS_ARB, 8,
-            //WGL_GREEN_BITS_ARB, 8,
-            //WGL_BLUE_BITS_ARB, 8,
-            //WGL_ALPHA_BITS_ARB, 8,
-            WGL_DEPTH_BITS_ARB, 24,
-            WGL_STENCIL_BITS_ARB, 8,
-            0 // Terminator
+        // First, create a dummy context to get WGL extensions
+        PIXELFORMATDESCRIPTOR pixelFormatDesc = {
+            .nSize = sizeof(PIXELFORMATDESCRIPTOR),
+            .nVersion = 1,
+            .dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+            .iPixelType = PFD_TYPE_RGBA,
+            .cColorBits = 32,
+            .cAlphaBits = 8,
+            .cDepthBits = 24,
+            .iLayerType = PFD_MAIN_PLANE
         };
 
-        int format = 0;
-        UINT numFormats = 0;
-        if (wglChoosePixelFormatARB(hdc, pixelFormatAttribs, NULL, 1, &format, &numFormats) && (numFormats > 0))
-        {
-            PIXELFORMATDESCRIPTOR newPixelFormatDescriptor = { 0 };
-            DescribePixelFormat(hdc, format, sizeof(newPixelFormatDescriptor), &newPixelFormatDescriptor);
-            SetPixelFormat(hdc, format, &newPixelFormatDescriptor);
-        }
-    }
+        int pixelFormat = ChoosePixelFormat(hdc, &pixelFormatDesc);
+        SetPixelFormat(hdc, pixelFormat, &pixelFormatDesc);
+        //int pixelFormat = ChoosePixelFormat(platform.hdc, &pixelFormatDesc);
+        //if (!pixelFormat) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "ChoosePixelFormat", GetLastError()); return -1; }
+        //if (!SetPixelFormat(platform.hdc, pixelFormat, &pixelFormatDesc)) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "SetPixelFormat", GetLastError()); return -1; }
 
-    // Create real modern OpenGL context (3.3 core)
-    HGLRC realContext = NULL;
-    if (wglCreateContextAttribsARB)
-    {
-        int glContextVersionMajor = 1;
-        int glContextVersionMinor = 1;
-        int glContextProfile = WGL_CONTEXT_CORE_PROFILE_BIT_ARB;
+        HGLRC tempContext = wglCreateContext(hdc);
+        //if (!tempContext) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "wglCreateContext", GetLastError()); return -1; }
+        BOOL result = wglMakeCurrent(hdc, tempContext);
+        //if (!result) { TRACELOG(LOG_ERROR, "%s failed, error=%lu", "wglMakeCurrent", GetLastError()); return -1; }
 
-        if (rlGetVersion() == RL_OPENGL_21)         // Request OpenGL 2.1 context
+        // Load WGL extension entry points
+        wglCreateContextAttribsARB = (PFNWGLCREATECONTEXTATTRIBSARBPROC)wglGetProcAddress("wglCreateContextAttribsARB");
+        wglChoosePixelFormatARB = (PFNWGLCHOOSEPIXELFORMATARBPROC)wglGetProcAddress("wglChoosePixelFormatARB");
+        wglSwapIntervalEXT = (PFNWGLSWAPINTERVALEXTPROC)wglGetProcAddress("wglSwapIntervalEXT");
+        wglGetExtensionsStringARB = (PFNWGLGETEXTENSIONSSTRINGARBPROC)wglGetProcAddress("wglGetExtensionsStringARB");
+
+        // Setup modern pixel format if extension is available
+        if (wglChoosePixelFormatARB)
         {
-            glContextVersionMajor = 2;
-            glContextVersionMinor = 1;
+            int pixelFormatAttribs[] = {
+                WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB,
+                WGL_DRAW_TO_WINDOW_ARB, GL_TRUE,
+                WGL_SUPPORT_OPENGL_ARB, GL_TRUE,
+                WGL_DOUBLE_BUFFER_ARB, GL_TRUE,
+                WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
+                WGL_COLOR_BITS_ARB, 32,
+                //WGL_RED_BITS_ARB, 8,
+                //WGL_GREEN_BITS_ARB, 8,
+                //WGL_BLUE_BITS_ARB, 8,
+                //WGL_ALPHA_BITS_ARB, 8,
+                WGL_DEPTH_BITS_ARB, 24,
+                WGL_STENCIL_BITS_ARB, 8,
+                0 // Terminator
+            };
+
+            int format = 0;
+            UINT numFormats = 0;
+            if (wglChoosePixelFormatARB(hdc, pixelFormatAttribs, NULL, 1, &format, &numFormats) && (numFormats > 0))
+            {
+                PIXELFORMATDESCRIPTOR newPixelFormatDescriptor = { 0 };
+                DescribePixelFormat(hdc, format, sizeof(newPixelFormatDescriptor), &newPixelFormatDescriptor);
+                SetPixelFormat(hdc, format, &newPixelFormatDescriptor);
+            }
         }
-        else if (rlGetVersion() == RL_OPENGL_33)    // Request OpenGL 3.3 context
+
+        // Create real modern OpenGL context (3.3 core)
+        HGLRC realContext = NULL;
+        if (wglCreateContextAttribsARB)
         {
-            glContextVersionMajor = 3;
-            glContextVersionMinor = 3;
-        }
-        else if (rlGetVersion() == RL_OPENGL_43)    // Request OpenGL 4.3 context
-        {
-            glContextVersionMajor = 4;
-            glContextVersionMinor = 3;
-        }
-        else if (rlGetVersion() == RL_OPENGL_ES_20) // Request OpenGL ES 2.0 context
-        {
-            if (IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es_profile") ||
-                IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es2_profile"))
+            int glContextVersionMajor = 1;
+            int glContextVersionMinor = 1;
+            int glContextProfile = WGL_CONTEXT_CORE_PROFILE_BIT_ARB;
+
+            if (rlGetVersion() == RL_OPENGL_21)         // Request OpenGL 2.1 context
             {
                 glContextVersionMajor = 2;
-                glContextVersionMinor = 0;
-                glContextProfile = WGL_CONTEXT_ES_PROFILE_BIT_EXT;
+                glContextVersionMinor = 1;
             }
-            else TRACELOG(LOG_WARNING, "GL: OpenGL ES context not supported by GPU");
-        }
-        else if (rlGetVersion() == RL_OPENGL_ES_30) // Request OpenGL ES 3.0 context
-        {
-            if (IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es_profile") ||
-                IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es2_profile"))
+            else if (rlGetVersion() == RL_OPENGL_33)    // Request OpenGL 3.3 context
             {
                 glContextVersionMajor = 3;
-                glContextVersionMinor = 0;
-                glContextProfile = WGL_CONTEXT_ES_PROFILE_BIT_EXT;
+                glContextVersionMinor = 3;
             }
-            else TRACELOG(LOG_WARNING, "GL: OpenGL ES context not supported by GPU");
+            else if (rlGetVersion() == RL_OPENGL_43)    // Request OpenGL 4.3 context
+            {
+                glContextVersionMajor = 4;
+                glContextVersionMinor = 3;
+            }
+            else if (rlGetVersion() == RL_OPENGL_ES_20) // Request OpenGL ES 2.0 context
+            {
+                if (IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es_profile") ||
+                    IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es2_profile"))
+                {
+                    glContextVersionMajor = 2;
+                    glContextVersionMinor = 0;
+                    glContextProfile = WGL_CONTEXT_ES_PROFILE_BIT_EXT;
+                }
+                else TRACELOG(LOG_WARNING, "GL: OpenGL ES context not supported by GPU");
+            }
+            else if (rlGetVersion() == RL_OPENGL_ES_30) // Request OpenGL ES 3.0 context
+            {
+                if (IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es_profile") ||
+                    IsWglExtensionAvailable(platform.hdc, "WGL_EXT_create_context_es2_profile"))
+                {
+                    glContextVersionMajor = 3;
+                    glContextVersionMinor = 0;
+                    glContextProfile = WGL_CONTEXT_ES_PROFILE_BIT_EXT;
+                }
+                else TRACELOG(LOG_WARNING, "GL: OpenGL ES context not supported by GPU");
+            }
+
+            int contextAttribs[] = {
+                WGL_CONTEXT_MAJOR_VERSION_ARB, glContextVersionMajor,
+                WGL_CONTEXT_MINOR_VERSION_ARB, glContextVersionMinor,
+                WGL_CONTEXT_PROFILE_MASK_ARB, glContextProfile, // WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB, WGL_CONTEXT_ES_PROFILE_BIT_EXT (if supported)
+                //WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB | WGL_CONTEXT_DEBUG_BIT_ARB [glDebugMessageCallback()]
+                0 // Terminator
+            };
+
+            // NOTE: Not sharing context resources so, second parameters is NULL
+            realContext = wglCreateContextAttribsARB(hdc, NULL, contextAttribs);
+
+            // Check for error context creation errors
+            // ERROR_INVALID_VERSION_ARB (0x2095)
+            // ERROR_INVALID_PROFILE_ARB (0x2096)
+            if (realContext == NULL) TRACELOG(LOG_ERROR, "GL: Error creating requested context: %lu", GetLastError());
         }
 
-        int contextAttribs[] = {
-            WGL_CONTEXT_MAJOR_VERSION_ARB, glContextVersionMajor,
-            WGL_CONTEXT_MINOR_VERSION_ARB, glContextVersionMinor,
-            WGL_CONTEXT_PROFILE_MASK_ARB, glContextProfile, // WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB, WGL_CONTEXT_ES_PROFILE_BIT_EXT (if supported)
-            //WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB | WGL_CONTEXT_DEBUG_BIT_ARB [glDebugMessageCallback()]
-            0 // Terminator
-        };
+        // Cleanup dummy temp context
+        wglMakeCurrent(NULL, NULL);
+        wglDeleteContext(tempContext);
 
-        // NOTE: Not sharing context resources so, second parameters is NULL
-        realContext = wglCreateContextAttribsARB(hdc, NULL, contextAttribs);
+        // Activate real context
+        if (realContext) wglMakeCurrent(hdc, realContext);
 
-        // Check for error context creation errors
-        // ERROR_INVALID_VERSION_ARB (0x2095)
-        // ERROR_INVALID_PROFILE_ARB (0x2096)
-        if (realContext == NULL) TRACELOG(LOG_ERROR, "GL: Error creating requested context: %lu", GetLastError());
+        // Once a real modern OpenGL context is created,
+        // required extensions can be loaded (function pointers)
+        rlLoadExtensions(WglGetProcAddress);
+
+        return realContext;
     }
-
-    // Cleanup dummy temp context
-    wglMakeCurrent(NULL, NULL);
-    wglDeleteContext(tempContext);
-
-    // Activate real context
-    if (realContext) wglMakeCurrent(hdc, realContext);
-
-    // Once a real modern OpenGL context is created,
-    // required extensions can be loaded (function pointers)
-    rlLoadExtensions(WglGetProcAddress);
-
-    return realContext;
-}
+#endif
 
 // Initialize platform: graphics, inputs and more
 int InitPlatform(void)
@@ -1623,7 +1635,7 @@ int InitPlatform(void)
     // NOTE: Windows GDI object that represents a drawing surface
     platform.hdc = GetDC(platform.hwnd);
 
-    if (rlGetVersion() == RL_OPENGL_SOFTWARE) // Using software renderer
+    if ((rlGetVersion() == RL_OPENGL_SOFTWARE) || (rlGetVersion() == RL_DAXA)) // Using memory framebuffer renderer
     {
         // Initialize software framebuffer
         BITMAPINFO bmi = { 0 };
@@ -1653,11 +1665,13 @@ int InitPlatform(void)
 
         //ReleaseDC(platform.hwnd, platform.hdc); // Required?
     }
+#if defined(WIN32_USE_WGL)
     else
     {
         // Init hardware-accelerated OpenGL modern context
         platform.glContext = InitOpenGL(platform.hwnd, platform.hdc);
     }
+#endif
 
     CORE.Window.ready = true;
 
@@ -1685,6 +1699,10 @@ int InitPlatform(void)
         TRACELOG(LOG_INFO, "    > Renderer: %s", glGetString(GL_RENDERER));
         TRACELOG(LOG_INFO, "    > Version:  %s", glGetString(GL_VERSION));
         TRACELOG(LOG_INFO, "    > GLSL:     %s", "NOT SUPPORTED");
+    }
+    else if (rlGetVersion() == RL_DAXA)
+    {
+        TRACELOG(LOG_INFO, "DAXA: Device initialized successfully");
     }
 
     // Initialize timing system
@@ -1752,7 +1770,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
         case WM_DESTROY:
         {
             // Clean up for window destruction
-            if (rlGetVersion() == RL_OPENGL_SOFTWARE) // Using software renderer
+            if ((rlGetVersion() == RL_OPENGL_SOFTWARE) || (rlGetVersion() == RL_DAXA)) // Using memory framebuffer renderer
             {
                 if (platform.hdcmem)
                 {
@@ -1767,6 +1785,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
                     platform.pixels = NULL; // NOTE: Pointer invalid after DeleteObject()
                 }
             }
+#if defined(WIN32_USE_WGL)
             else // OpenGL hardware renderer
             {
                 wglMakeCurrent(platform.hdc, NULL);
@@ -1776,6 +1795,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
                     platform.glContext = NULL;
                 }
             }
+#endif
 
             if (platform.hdc)
             {
@@ -1808,7 +1828,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             // in response to WM_WINDOWPOSCHANGED but looks like when a window is created,
             // this message can be obtained without getting WM_WINDOWPOSCHANGED
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA)
             // WARNING: Waiting two frames before resizing because software-renderer backend is initilized with swInit() later
             // than InitPlatform(), that triggers WM_SIZE, so avoid crashing
             if (CORE.Time.frameCounter > 2) HandleWindowResize(hwnd, &platform.appScreenWidth, &platform.appScreenHeight);
@@ -1981,7 +2001,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
         } break;
         case WM_PAINT:
         {
-            if (rlGetVersion() == RL_OPENGL_SOFTWARE) // Using software renderer
+            if ((rlGetVersion() == RL_OPENGL_SOFTWARE) || (rlGetVersion() == RL_DAXA)) // Using memory framebuffer renderer
             {
                 PAINTSTRUCT ps = { 0 };
                 HDC hdc = BeginPaint(hwnd, &ps);
@@ -2140,7 +2160,7 @@ static void HandleWindowResize(HWND hwnd, int *width, int *height)
     CORE.Window.screenScale = MatrixScale( (float)CORE.Window.render.width/CORE.Window.screen.width,
         (float)CORE.Window.render.height/CORE.Window.screen.height, 1.0f);
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA)
     swResize(clientSize.cx, clientSize.cy);
 #endif
 }
@@ -2257,6 +2277,7 @@ static void UpdateFlags(HWND hwnd, unsigned desiredFlags, int width, int height)
     // Flags that apply immediately without needing any operations
     CORE.Window.flags |= (desiredFlags & FLAG_MASK_NO_UPDATE);
 
+#if defined(WIN32_USE_WGL)
     int vsync = (desiredFlags & FLAG_VSYNC_HINT)? 1 : 0;
     if (wglSwapIntervalEXT)
     {
@@ -2264,6 +2285,7 @@ static void UpdateFlags(HWND hwnd, unsigned desiredFlags, int width, int height)
         if (vsync) CORE.Window.flags |= FLAG_VSYNC_HINT;
         else CORE.Window.flags &= ~FLAG_VSYNC_HINT;
     }
+#endif
 
     // TODO: Review all this code...
     DWORD previousStyle = 0;
@@ -2290,20 +2312,22 @@ static void UpdateFlags(HWND hwnd, unsigned desiredFlags, int width, int height)
     }
 }
 
-// Check if OpenGL extension is available
-static bool IsWglExtensionAvailable(HDC hdc, const char *extension)
-{
-    bool result = false;
-
-    if (wglGetExtensionsStringARB != NULL)
+#if defined(WIN32_USE_WGL)
+    // Check if OpenGL extension is available
+    static bool IsWglExtensionAvailable(HDC hdc, const char *extension)
     {
-        const char *extList = wglGetExtensionsStringARB(hdc);
-        if (extList != NULL)
-        {
-            // Simple substring search (could use strtok or strstr)
-            if (strstr(extList, extension) != NULL) result = true;
-        }
-    }
+        bool result = false;
 
-    return result;
-}
+        if (wglGetExtensionsStringARB != NULL)
+        {
+            const char *extList = wglGetExtensionsStringARB(hdc);
+            if (extList != NULL)
+            {
+                // Simple substring search (could use strtok or strstr)
+                if (strstr(extList, extension) != NULL) result = true;
+            }
+        }
+
+        return result;
+    }
+#endif
