@@ -1130,10 +1130,6 @@ static double rlCullDistanceFar = RL_CULL_DISTANCE_FAR;
 static rlglData RLGL = { 0 };
 #endif
 
-#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
-static unsigned int RLGLDaxaNextTextureId = 1;
-#endif
-
 #if defined(GRAPHICS_API_OPENGL_ES2) && !defined(GRAPHICS_API_OPENGL_ES3)
 // VAO functions entry points
 // NOTE: VAO functionality is exposed through extensions (OES)
@@ -2336,10 +2332,19 @@ void rlglInit(int width, int height)
 #endif // GRAPHICS_API_OPENGL_33 || GRAPHICS_API_OPENGL_ES2
 
 #if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
-    RLGL.State.defaultTextureId = 1;
+    unsigned char pixels[4] = { 255, 255, 255, 255 };
+    RLGL.State.defaultTextureId = rlLoadTexture(pixels, 1, 1, RL_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, 1);
     RLGL.State.currentTextureId = RLGL.State.defaultTextureId;
     RLGL.defaultBatch = rlLoadRenderBatch(RL_DEFAULT_BATCH_BUFFERS, RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
     RLGL.currentBatch = &RLGL.defaultBatch;
+
+    if (RLGL.currentBatch != NULL)
+    {
+        RLGL.currentBatch->draws[RLGL.currentBatch->drawCounter - 1].textureId = RLGL.State.defaultTextureId;
+    }
+
+    if (RLGL.State.defaultTextureId != 0) TRACELOG(RL_LOG_INFO, "TEXTURE: [ID %i] Default texture loaded successfully", RLGL.State.defaultTextureId);
+    else TRACELOG(RL_LOG_WARNING, "TEXTURE: Failed to load default texture");
 
     for (int i = 0; i < RL_MAX_MATRIX_STACK_SIZE; i++) RLGL.State.stack[i] = rlMatrixIdentity();
 
@@ -3344,14 +3349,12 @@ unsigned int rlLoadTexture(const void *data, int width, int height, int format, 
     if (!isGpuReady) { TRACELOG(RL_LOG_WARNING, "GL: GPU is not ready to load data, trying to load before InitWindow()?"); return id; }
 
 #if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
-    (void)data;
-    (void)format;
     (void)mipmapCount;
 
-    if ((width > 0) && (height > 0)) id = RLGLDaxaNextTextureId++;
+    id = rdaxaLoadTexture(data, width, height, format);
 
-    if (id > 0) TRACELOG(RL_LOG_INFO, "TEXTURE: [ID %i] Daxa texture handle allocated (%ix%i)", id, width, height);
-    else TRACELOG(RL_LOG_WARNING, "TEXTURE: Failed to allocate Daxa texture handle");
+    if (id > 0) TRACELOG(RL_LOG_INFO, "TEXTURE: [ID %i] Daxa texture loaded successfully (%ix%i)", id, width, height);
+    else TRACELOG(RL_LOG_WARNING, "TEXTURE: Failed to load Daxa texture");
 
     return id;
 #endif
@@ -3697,13 +3700,7 @@ unsigned int rlLoadTextureCubemap(const void *data, int size, int format, int mi
 void rlUpdateTexture(unsigned int id, int offsetX, int offsetY, int width, int height, int format, const void *data)
 {
 #if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
-    (void)id;
-    (void)offsetX;
-    (void)offsetY;
-    (void)width;
-    (void)height;
-    (void)format;
-    (void)data;
+    rdaxaUpdateTexture(id, offsetX, offsetY, width, height, format, data);
     return;
 #endif
 
@@ -3796,7 +3793,7 @@ void rlGetGlTextureFormats(int format, unsigned int *glInternalFormat, unsigned 
 void rlUnloadTexture(unsigned int id)
 {
 #if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
-    (void)id;
+    rdaxaUnloadTexture(id);
     return;
 #endif
 

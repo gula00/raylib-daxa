@@ -1232,7 +1232,10 @@ void SwapScreenBuffer(void)
     if (!platform.hdc) abort();
 
 #if defined(GRAPHICS_API_DAXA)
-    // Daxa native batches are submitted and presented by rlgl.
+    if (!rdaxaPresentFrame())
+    {
+        TRACELOG(LOG_WARNING, "DAXA: Failed to present frame");
+    }
 #elif defined(GRAPHICS_API_OPENGL_SOFTWARE)
     // Update framebuffer
     rlCopyFramebuffer(0, 0, CORE.Window.render.width, CORE.Window.render.height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, platform.pixels);

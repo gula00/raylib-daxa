@@ -19,6 +19,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #if !defined(DAXA_SHADER_INCLUDE_DIR)
@@ -30,6 +31,10 @@ namespace
 constexpr int RDAXA_RL_LINES = 0x0001;
 constexpr int RDAXA_RL_TRIANGLES = 0x0004;
 constexpr int RDAXA_RL_QUADS = 0x0007;
+constexpr int RDAXA_PIXELFORMAT_UNCOMPRESSED_GRAYSCALE = 1;
+constexpr int RDAXA_PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA = 2;
+constexpr int RDAXA_PIXELFORMAT_UNCOMPRESSED_R8G8B8 = 4;
+constexpr int RDAXA_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 = 7;
 
 struct RdaxaGpuVertex
 {
@@ -43,12 +48,25 @@ struct RdaxaNativeDraw
     int mode = 0;
     std::size_t firstVertex = 0;
     std::size_t vertexCount = 0;
+    unsigned int textureId = 0;
+    float mvp[16] = {};
 };
 
 struct RdaxaPushConstants
 {
     float mvp[16];
     daxa::DeviceAddress vertices = {};
+    daxa::ImageViewId texture = {};
+    daxa::SamplerId textureSampler = {};
+    daxa::u32 useTexture = {};
+    daxa::u32 padding[3] = {};
+};
+
+struct RdaxaTexture
+{
+    daxa::ImageId image = {};
+    int width = 0;
+    int height = 0;
 };
 
 struct RaylibDaxaContext
@@ -59,6 +77,7 @@ struct RaylibDaxaContext
     daxa::PipelineManager pipelineManager = {};
     std::shared_ptr<daxa::RasterPipeline> trianglePipeline = {};
     std::shared_ptr<daxa::RasterPipeline> linePipeline = {};
+    daxa::SamplerId sampler = {};
     daxa::BufferId uploadBuffer = {};
     daxa::BufferId nativeVertexBuffer = {};
     std::byte *uploadPtr = nullptr;
@@ -68,11 +87,15 @@ struct RaylibDaxaContext
     std::vector<std::byte> convertedPixels = {};
     std::vector<RdaxaGpuVertex> nativeVertices = {};
     std::vector<RdaxaNativeDraw> nativeDraws = {};
+    std::vector<RdaxaGpuVertex> frameVertices = {};
+    std::vector<RdaxaNativeDraw> frameDraws = {};
+    std::unordered_map<unsigned int, RdaxaTexture> textures = {};
     rdaxa_WindowHandle window = nullptr;
     int width = 0;
     int height = 0;
     float clearColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     unsigned int presentedFrameCount = 0;
+    unsigned int nextTextureId = 1;
 };
 
 static std::unique_ptr<RaylibDaxaContext> g_daxa;
@@ -93,29 +116,39 @@ DAXA_DECL_BUFFER_PTR(RdaxaVertex)
 struct RdaxaPushConstants {
     daxa_f32mat4x4 mvp;
     daxa_BufferPtr(RdaxaVertex) vertices;
+    daxa_ImageViewId texture;
+    daxa_SamplerId textureSampler;
+    daxa_u32 useTexture;
+    daxa_u32 padding0;
+    daxa_u32 padding1;
+    daxa_u32 padding2;
 };
 
 DAXA_DECL_PUSH_CONSTANT(RdaxaPushConstants, rdaxa)
 
 #if DAXA_SHADER_STAGE == DAXA_SHADER_STAGE_VERTEX
 
-layout(location = 0) out daxa_f32vec4 fragColor;
+layout(location = 0) out daxa_f32vec2 fragTexCoord;
+layout(location = 1) out daxa_f32vec4 fragColor;
 
 void main()
 {
     RdaxaVertex vertex = deref_i(rdaxa.vertices, gl_VertexIndex);
     gl_Position = rdaxa.mvp * daxa_f32vec4(vertex.position, 1.0);
+    fragTexCoord = vertex.texcoord;
     fragColor = vertex.color;
 }
 
 #elif DAXA_SHADER_STAGE == DAXA_SHADER_STAGE_FRAGMENT
 
-layout(location = 0) in daxa_f32vec4 fragColor;
+layout(location = 0) in daxa_f32vec2 fragTexCoord;
+layout(location = 1) in daxa_f32vec4 fragColor;
 layout(location = 0) out daxa_f32vec4 outColor;
 
 void main()
 {
-    outColor = fragColor;
+    daxa_f32vec4 texelColor = (rdaxa.useTexture != 0) ? texture(daxa_sampler2D(rdaxa.texture, rdaxa.textureSampler), fragTexCoord) : daxa_f32vec4(1.0, 1.0, 1.0, 1.0);
+    outColor = texelColor * fragColor;
 }
 
 #endif
@@ -276,6 +309,142 @@ static bool NeedsBgraUpload(daxa::Format format)
     return format == daxa::Format::B8G8R8A8_UNORM || format == daxa::Format::B8G8R8A8_SRGB;
 }
 
+static bool ConvertTexturePixelsToRgba8(
+    const void *data,
+    int width,
+    int height,
+    int format,
+    std::vector<std::byte> &outPixels)
+{
+    if (width <= 0 || height <= 0)
+    {
+        return false;
+    }
+
+    std::size_t const pixelCount = static_cast<std::size_t>(width)*static_cast<std::size_t>(height);
+    outPixels.resize(pixelCount*4u);
+    auto *dst = reinterpret_cast<unsigned char *>(outPixels.data());
+
+    if (data == nullptr)
+    {
+        std::memset(dst, 0, outPixels.size());
+        return true;
+    }
+
+    auto const *src = static_cast<unsigned char const *>(data);
+    if (format == RDAXA_PIXELFORMAT_UNCOMPRESSED_R8G8B8A8)
+    {
+        std::memcpy(dst, src, outPixels.size());
+        return true;
+    }
+
+    for (std::size_t i = 0; i < pixelCount; i++)
+    {
+        if (format == RDAXA_PIXELFORMAT_UNCOMPRESSED_GRAYSCALE)
+        {
+            unsigned char const gray = src[i];
+            dst[i*4u + 0] = gray;
+            dst[i*4u + 1] = gray;
+            dst[i*4u + 2] = gray;
+            dst[i*4u + 3] = 255;
+        }
+        else if (format == RDAXA_PIXELFORMAT_UNCOMPRESSED_GRAY_ALPHA)
+        {
+            unsigned char const gray = src[i*2u + 0];
+            dst[i*4u + 0] = gray;
+            dst[i*4u + 1] = gray;
+            dst[i*4u + 2] = gray;
+            dst[i*4u + 3] = src[i*2u + 1];
+        }
+        else if (format == RDAXA_PIXELFORMAT_UNCOMPRESSED_R8G8B8)
+        {
+            dst[i*4u + 0] = src[i*3u + 0];
+            dst[i*4u + 1] = src[i*3u + 1];
+            dst[i*4u + 2] = src[i*3u + 2];
+            dst[i*4u + 3] = 255;
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool UploadTextureRegion(
+    RaylibDaxaContext &ctx,
+    daxa::ImageId image,
+    int offsetX,
+    int offsetY,
+    int width,
+    int height,
+    const std::vector<std::byte> &rgbaPixels)
+{
+    if (image.is_empty() || width <= 0 || height <= 0 || rgbaPixels.empty())
+    {
+        return false;
+    }
+
+    daxa::BufferId stagingBuffer = ctx.device.create_buffer({
+        .size = rgbaPixels.size(),
+        .memory_flags = daxa::MemoryFlagBits::HOST_ACCESS_SEQUENTIAL_WRITE,
+        .name = "raylib Daxa texture upload",
+    });
+
+    auto hostAddress = ctx.device.buffer_host_address(stagingBuffer);
+    if (!hostAddress.has_value())
+    {
+        ctx.device.destroy_buffer(stagingBuffer);
+        return false;
+    }
+
+    std::memcpy(hostAddress.value(), rgbaPixels.data(), rgbaPixels.size());
+
+    daxa::CommandRecorder recorder = ctx.device.create_command_recorder({
+        .name = "raylib Daxa texture upload recorder",
+    });
+
+    recorder.pipeline_image_barrier({
+        .dst_access = daxa::AccessConsts::TRANSFER_WRITE,
+        .image = image,
+        .layout_operation = daxa::ImageLayoutOperation::TO_GENERAL,
+    });
+
+    recorder.copy_buffer_to_image({
+        .src_buffer = stagingBuffer,
+        .buffer_offset = 0,
+        .dst_image = image,
+        .image_slice = { .mip_level = 0, .base_array_layer = 0, .layer_count = 1 },
+        .image_offset = {
+            static_cast<daxa::i32>(offsetX),
+            static_cast<daxa::i32>(offsetY),
+            0,
+        },
+        .image_extent = {
+            static_cast<daxa::u32>(width),
+            static_cast<daxa::u32>(height),
+            1,
+        },
+    });
+
+    recorder.pipeline_image_barrier({
+        .src_access = daxa::AccessConsts::TRANSFER_WRITE,
+        .dst_access = daxa::AccessConsts::FRAGMENT_SHADER_READ,
+        .image = image,
+        .layout_operation = daxa::ImageLayoutOperation::TO_GENERAL,
+    });
+
+    daxa::ExecutableCommandList commands = recorder.complete_current_commands();
+    ctx.device.submit_commands(daxa::CommandSubmitInfo{
+        .command_lists = std::array{ commands },
+    });
+    ctx.device.wait_idle();
+    ctx.device.destroy_buffer(stagingBuffer);
+    ctx.device.collect_garbage();
+    return true;
+}
+
 static void const *PrepareUploadPixels(RaylibDaxaContext &ctx, void const *rgbaPixels, int width, int height)
 {
     daxa::Format const format = ctx.swapchain.get_format();
@@ -355,7 +524,9 @@ static bool BuildNativeVertices(RaylibDaxaContext &ctx, const rdaxa_BatchData &b
             .mode = draw.mode,
             .firstVertex = ctx.nativeVertices.size(),
             .vertexCount = 0,
+            .textureId = draw.textureId,
         };
+        std::memcpy(nativeDraw.mvp, batch.mvp, sizeof(nativeDraw.mvp));
 
         if (draw.mode == RDAXA_RL_LINES)
         {
@@ -425,6 +596,16 @@ bool rdaxaInit(rdaxa_WindowHandle window, int width, int height)
             .name = "raylib Daxa swapchain",
         });
 
+        ctx.sampler = ctx.device.create_sampler({
+            .magnification_filter = daxa::Filter::NEAREST,
+            .minification_filter = daxa::Filter::NEAREST,
+            .mipmap_filter = daxa::Filter::NEAREST,
+            .address_mode_u = daxa::SamplerAddressMode::CLAMP_TO_EDGE,
+            .address_mode_v = daxa::SamplerAddressMode::CLAMP_TO_EDGE,
+            .address_mode_w = daxa::SamplerAddressMode::CLAMP_TO_EDGE,
+            .name = "raylib Daxa default sampler",
+        });
+
         return CreateNativePipelines(ctx);
     }
     catch (...)
@@ -444,6 +625,19 @@ void rdaxaShutdown(void)
     try
     {
         g_daxa->device.wait_idle();
+        for (auto &entry : g_daxa->textures)
+        {
+            if (!entry.second.image.is_empty())
+            {
+                g_daxa->device.destroy_image(entry.second.image);
+            }
+        }
+        g_daxa->textures.clear();
+        if (!g_daxa->sampler.is_empty())
+        {
+            g_daxa->device.destroy_sampler(g_daxa->sampler);
+            g_daxa->sampler = {};
+        }
         g_daxa->trianglePipeline.reset();
         g_daxa->linePipeline.reset();
         g_daxa->pipelineManager = {};
@@ -489,6 +683,118 @@ void rdaxaSetClearColor(unsigned char r, unsigned char g, unsigned char b, unsig
     g_daxa->clearColor[3] = static_cast<float>(a)/255.0f;
 }
 
+unsigned int rdaxaLoadTexture(const void *data, int width, int height, int format)
+{
+    if (!g_daxa || width <= 0 || height <= 0)
+    {
+        return 0;
+    }
+
+    RaylibDaxaContext &ctx = *g_daxa;
+
+    try
+    {
+        std::vector<std::byte> rgbaPixels = {};
+        if (!ConvertTexturePixelsToRgba8(data, width, height, format, rgbaPixels))
+        {
+            return 0;
+        }
+
+        RdaxaTexture texture = {};
+        texture.width = width;
+        texture.height = height;
+        texture.image = ctx.device.create_image({
+            .format = daxa::Format::R8G8B8A8_UNORM,
+            .size = {
+                static_cast<daxa::u32>(width),
+                static_cast<daxa::u32>(height),
+                1,
+            },
+            .usage = daxa::ImageUsageFlagBits::TRANSFER_DST | daxa::ImageUsageFlagBits::SHADER_SAMPLED,
+            .name = "raylib Daxa texture",
+        });
+
+        if (texture.image.is_empty() || !UploadTextureRegion(ctx, texture.image, 0, 0, width, height, rgbaPixels))
+        {
+            if (!texture.image.is_empty())
+            {
+                ctx.device.destroy_image(texture.image);
+            }
+            return 0;
+        }
+
+        unsigned int const id = ctx.nextTextureId++;
+        ctx.textures[id] = texture;
+        return id;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+void rdaxaUpdateTexture(unsigned int id, int offsetX, int offsetY, int width, int height, int format, const void *data)
+{
+    if (!g_daxa || id == 0 || data == nullptr)
+    {
+        return;
+    }
+
+    RaylibDaxaContext &ctx = *g_daxa;
+    auto it = ctx.textures.find(id);
+    if (it == ctx.textures.end())
+    {
+        return;
+    }
+
+    if (offsetX < 0 || offsetY < 0 || width <= 0 || height <= 0 ||
+        offsetX + width > it->second.width || offsetY + height > it->second.height)
+    {
+        return;
+    }
+
+    try
+    {
+        std::vector<std::byte> rgbaPixels = {};
+        if (ConvertTexturePixelsToRgba8(data, width, height, format, rgbaPixels))
+        {
+            (void)UploadTextureRegion(ctx, it->second.image, offsetX, offsetY, width, height, rgbaPixels);
+        }
+    }
+    catch (...)
+    {
+    }
+}
+
+void rdaxaUnloadTexture(unsigned int id)
+{
+    if (!g_daxa || id == 0)
+    {
+        return;
+    }
+
+    RaylibDaxaContext &ctx = *g_daxa;
+    auto it = ctx.textures.find(id);
+    if (it == ctx.textures.end())
+    {
+        return;
+    }
+
+    try
+    {
+        ctx.device.wait_idle();
+        if (!it->second.image.is_empty())
+        {
+            ctx.device.destroy_image(it->second.image);
+        }
+        ctx.textures.erase(it);
+        ctx.device.collect_garbage();
+    }
+    catch (...)
+    {
+    }
+}
+
 unsigned int rdaxaGetPresentedFrameCount(void)
 {
     if (!g_daxa)
@@ -512,14 +818,46 @@ bool rdaxaDrawBatch(const rdaxa_BatchData *batch)
     {
         bool const hasNativeDraws = BuildNativeVertices(ctx, *batch);
 
-        if (hasNativeDraws && !EnsureNativeVertexBuffer(ctx, ctx.nativeVertices.size()))
-        {
-            return false;
-        }
-
         if (hasNativeDraws)
         {
-            std::memcpy(ctx.nativeVertexPtr, ctx.nativeVertices.data(), ctx.nativeVertices.size()*sizeof(RdaxaGpuVertex));
+            std::size_t const baseVertex = ctx.frameVertices.size();
+            ctx.frameVertices.insert(ctx.frameVertices.end(), ctx.nativeVertices.begin(), ctx.nativeVertices.end());
+
+            for (RdaxaNativeDraw draw : ctx.nativeDraws)
+            {
+                draw.firstVertex += baseVertex;
+                ctx.frameDraws.push_back(draw);
+            }
+        }
+
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool rdaxaPresentFrame(void)
+{
+    if (!g_daxa)
+    {
+        return false;
+    }
+
+    RaylibDaxaContext &ctx = *g_daxa;
+
+    try
+    {
+        bool const hasNativeDraws = !ctx.frameVertices.empty() && !ctx.frameDraws.empty();
+        if (hasNativeDraws)
+        {
+            if (!EnsureNativeVertexBuffer(ctx, ctx.frameVertices.size()))
+            {
+                return false;
+            }
+
+            std::memcpy(ctx.nativeVertexPtr, ctx.frameVertices.data(), ctx.frameVertices.size()*sizeof(RdaxaGpuVertex));
         }
 
         daxa::ImageId swapchainImage = ctx.swapchain.acquire_next_image();
@@ -560,9 +898,9 @@ bool rdaxaDrawBatch(const rdaxa_BatchData *batch)
 
         renderRecorder.set_viewport({
             .x = 0.0f,
-            .y = 0.0f,
+            .y = static_cast<float>(swapchainImageInfo.size.y),
             .width = static_cast<float>(swapchainImageInfo.size.x),
-            .height = static_cast<float>(swapchainImageInfo.size.y),
+            .height = -static_cast<float>(swapchainImageInfo.size.y),
             .min_depth = 0.0f,
             .max_depth = 1.0f,
         });
@@ -574,13 +912,12 @@ bool rdaxaDrawBatch(const rdaxa_BatchData *batch)
         });
 
         RdaxaPushConstants push = {};
-        std::memcpy(push.mvp, batch->mvp, sizeof(push.mvp));
         if (hasNativeDraws)
         {
             push.vertices = ctx.device.device_address(ctx.nativeVertexBuffer).value();
         }
 
-        for (RdaxaNativeDraw const &draw : ctx.nativeDraws)
+        for (RdaxaNativeDraw const &draw : ctx.frameDraws)
         {
             if (draw.mode == RDAXA_RL_LINES)
             {
@@ -591,6 +928,20 @@ bool rdaxaDrawBatch(const rdaxa_BatchData *batch)
                 renderRecorder.set_pipeline(*ctx.trianglePipeline);
             }
 
+            std::memcpy(push.mvp, draw.mvp, sizeof(push.mvp));
+            auto textureIt = ctx.textures.find(draw.textureId);
+            if (textureIt != ctx.textures.end() && !textureIt->second.image.is_empty() && !ctx.sampler.is_empty())
+            {
+                push.texture = textureIt->second.image.default_view();
+                push.textureSampler = ctx.sampler;
+                push.useTexture = 1;
+            }
+            else
+            {
+                push.texture = {};
+                push.textureSampler = {};
+                push.useTexture = 0;
+            }
             renderRecorder.push_constant(push);
             renderRecorder.draw({
                 .vertex_count = static_cast<daxa::u32>(draw.vertexCount),
@@ -619,10 +970,14 @@ bool rdaxaDrawBatch(const rdaxa_BatchData *batch)
         });
         ctx.device.collect_garbage();
         ctx.presentedFrameCount++;
+        ctx.frameVertices.clear();
+        ctx.frameDraws.clear();
         return true;
     }
     catch (...)
     {
+        ctx.frameVertices.clear();
+        ctx.frameDraws.clear();
         return false;
     }
 }

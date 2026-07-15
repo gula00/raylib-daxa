@@ -42,7 +42,11 @@ bool rdaxaInit(rdaxa_WindowHandle window, int width, int height);
 void rdaxaShutdown(void);
 void rdaxaResize(int width, int height);
 void rdaxaSetClearColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+unsigned int rdaxaLoadTexture(const void *data, int width, int height, int format);
+void rdaxaUpdateTexture(unsigned int id, int offsetX, int offsetY, int width, int height, int format, const void *data);
+void rdaxaUnloadTexture(unsigned int id);
 bool rdaxaDrawBatch(const rdaxa_BatchData *batch);
+bool rdaxaPresentFrame(void);
 bool rdaxaPresent(const void *rgbaPixels, int width, int height);
 unsigned int rdaxaGetPresentedFrameCount(void);
 
