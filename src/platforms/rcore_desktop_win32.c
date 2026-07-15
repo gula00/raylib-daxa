@@ -1232,13 +1232,7 @@ void SwapScreenBuffer(void)
     if (!platform.hdc) abort();
 
 #if defined(GRAPHICS_API_DAXA)
-    // Update framebuffer
-    rlCopyFramebuffer(0, 0, CORE.Window.render.width, CORE.Window.render.height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, platform.pixels);
-
-    if (!rdaxaPresent(platform.pixels, CORE.Window.render.width, CORE.Window.render.height))
-    {
-        TRACELOG(LOG_WARNING, "DAXA: Failed to present software framebuffer");
-    }
+    // Daxa native batches are submitted and presented by rlgl.
 #elif defined(GRAPHICS_API_OPENGL_SOFTWARE)
     // Update framebuffer
     rlCopyFramebuffer(0, 0, CORE.Window.render.width, CORE.Window.render.height, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8, platform.pixels);
@@ -1828,7 +1822,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
             // in response to WM_WINDOWPOSCHANGED but looks like when a window is created,
             // this message can be obtained without getting WM_WINDOWPOSCHANGED
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
             // WARNING: Waiting two frames before resizing because software-renderer backend is initilized with swInit() later
             // than InitPlatform(), that triggers WM_SIZE, so avoid crashing
             if (CORE.Time.frameCounter > 2) HandleWindowResize(hwnd, &platform.appScreenWidth, &platform.appScreenHeight);
@@ -2160,7 +2154,7 @@ static void HandleWindowResize(HWND hwnd, int *width, int *height)
     CORE.Window.screenScale = MatrixScale( (float)CORE.Window.render.width/CORE.Window.screen.width,
         (float)CORE.Window.render.height/CORE.Window.screen.height, 1.0f);
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA)
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
     swResize(clientSize.cx, clientSize.cy);
 #endif
 }

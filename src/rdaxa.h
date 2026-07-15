@@ -15,6 +15,25 @@ typedef struct HWND__ *rdaxa_WindowHandle;
 typedef void *rdaxa_WindowHandle;
 #endif
 
+typedef struct rdaxa_DrawCall {
+    int mode;
+    int vertexCount;
+    int vertexAlignment;
+    unsigned int textureId;
+} rdaxa_DrawCall;
+
+typedef struct rdaxa_BatchData {
+    const float *vertices;
+    const float *texcoords;
+    const unsigned char *colors;
+    int vertexCounter;
+    const rdaxa_DrawCall *draws;
+    int drawCounter;
+    const float *mvp;
+    int framebufferWidth;
+    int framebufferHeight;
+} rdaxa_BatchData;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -22,6 +41,8 @@ extern "C" {
 bool rdaxaInit(rdaxa_WindowHandle window, int width, int height);
 void rdaxaShutdown(void);
 void rdaxaResize(int width, int height);
+void rdaxaSetClearColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a);
+bool rdaxaDrawBatch(const rdaxa_BatchData *batch);
 bool rdaxaPresent(const void *rgbaPixels, int width, int height);
 unsigned int rdaxaGetPresentedFrameCount(void);
 

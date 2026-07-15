@@ -175,10 +175,9 @@
     #endif
 #endif
 
-// Daxa currently reuses the software raster path while owning presentation.
-// This keeps GRAPHICS_API_DAXA independent from public OpenGL backend selection
-// while the native Daxa rlgl renderer is brought up incrementally.
+// Daxa owns the native rendering path while preserving rlgl's CPU-side batch API.
 #if defined(GRAPHICS_API_DAXA)
+    #define GRAPHICS_API_DAXA_NATIVE_BATCH
     #define GRAPHICS_API_DAXA_SOFTWARE_RASTER
     #define GRAPHICS_API_OPENGL_11
 #endif
@@ -210,7 +209,7 @@
 
 // Default internal render batch elements limits
 #ifndef RL_DEFAULT_BATCH_BUFFER_ELEMENTS
-    #if defined(GRAPHICS_API_OPENGL_11) || defined(GRAPHICS_API_OPENGL_33)
+    #if defined(GRAPHICS_API_OPENGL_11) || defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
         // This is the maximum amount of elements (quads) per batch
         // NOTE: Be careful with text, every letter maps to a quad
         #define RL_DEFAULT_BATCH_BUFFER_ELEMENTS  8192
@@ -399,7 +398,7 @@ typedef struct rlVertexBuffer {
     float *texcoords;           // Vertex texture coordinates (UV - 2 components per vertex) (shader-location = 1)
     float *normals;             // Vertex normal (XYZ - 3 components per vertex) (shader-location = 2)
     unsigned char *colors;      // Vertex colors (RGBA - 4 components per vertex) (shader-location = 3)
-#if defined(GRAPHICS_API_OPENGL_11) || defined(GRAPHICS_API_OPENGL_33)
+#if defined(GRAPHICS_API_OPENGL_11) || defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
     unsigned int *indices;      // Vertex indices (in case vertex data comes indexed) (6 indices per quad)
 #endif
 #if defined(GRAPHICS_API_OPENGL_ES2)
@@ -844,6 +843,10 @@ RLAPI void rlLoadDrawQuad(void);     // Load and draw a quad
 
 #if defined(RLGL_IMPLEMENTATION)
 
+#if defined(GRAPHICS_API_DAXA)
+    #include "rdaxa.h"
+#endif
+
 // Expose OpenGL functions from glad in raylib
 #if defined(BUILD_LIBTYPE_SHARED)
     #define GLAD_API_CALL_EXPORT
@@ -1034,7 +1037,7 @@ RLAPI void rlLoadDrawQuad(void);     // Load and draw a quad
 //----------------------------------------------------------------------------------
 // Module Types and Structures Definition
 //----------------------------------------------------------------------------------
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 
 typedef void *(*rlglLoadProc)(const char *name);   // OpenGL extension functions loader signature (same as GLADloadproc)
 
@@ -1114,7 +1117,7 @@ typedef struct rlglData {
     } ExtSupported;     // Extensions supported flags
 } rlglData;
 
-#endif // GRAPHICS_API_OPENGL_33 || GRAPHICS_API_OPENGL_ES2
+#endif // GRAPHICS_API_OPENGL_33 || GRAPHICS_API_OPENGL_ES2 || GRAPHICS_API_DAXA_NATIVE_BATCH
 
 //----------------------------------------------------------------------------------
 // Global Variables Definition
@@ -1123,8 +1126,12 @@ static bool isGpuReady = false;
 static double rlCullDistanceNear = RL_CULL_DISTANCE_NEAR;
 static double rlCullDistanceFar = RL_CULL_DISTANCE_FAR;
 
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 static rlglData RLGL = { 0 };
+#endif
+
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+static unsigned int RLGLDaxaNextTextureId = 1;
 #endif
 
 #if defined(GRAPHICS_API_OPENGL_ES2) && !defined(GRAPHICS_API_OPENGL_ES3)
@@ -1144,7 +1151,7 @@ static PFNGLVERTEXATTRIBDIVISOREXTPROC glVertexAttribDivisor = NULL;
 //----------------------------------------------------------------------------------
 // Module Functions Declaration
 //----------------------------------------------------------------------------------
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 static void rlLoadShaderDefault(void);      // Load default shader
 static void rlUnloadShaderDefault(void);    // Unload default shader
 #if RLGL_SHOW_GL_DETAILS_INFO
@@ -1155,7 +1162,7 @@ static const char *rlGetCompressedFormatName(int format); // Get compressed form
 static int rlGetPixelDataSize(int width, int height, int format);   // Get pixel data size in bytes (image or texture)
 
 static Matrix rlMatrixIdentity(void);                       // Get identity matrix
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 // Auxiliar matrix math functions
 typedef struct rl_float16 { float v[16]; } rl_float16;
 static rl_float16 rlMatrixToFloatV(Matrix mat);             // Get float array of matrix data
@@ -1169,7 +1176,7 @@ static Matrix rlMatrixInvert(Matrix mat);                   // Invert provided m
 // Module Functions Definition - Matrix operations
 //----------------------------------------------------------------------------------
 
-#if defined(GRAPHICS_API_OPENGL_11)
+#if defined(GRAPHICS_API_OPENGL_11) && !defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 // Fallback to OpenGL 1.1 function calls
 //---------------------------------------
 void rlMatrixMode(int mode)
@@ -1201,7 +1208,7 @@ void rlRotatef(float angle, float x, float y, float z) { glRotatef(angle, x, y, 
 void rlScalef(float x, float y, float z) { glScalef(x, y, z); }
 void rlMultMatrixf(const float *matf) { glMultMatrixf(matf); }
 #endif
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 // Choose the current matrix to be transformed
 void rlMatrixMode(int mode)
 {
@@ -1407,7 +1414,14 @@ void rlOrtho(double left, double right, double bottom, double top, double znear,
 // Set the viewport area (transformation from normalized device coordinates to window coordinates)
 void rlViewport(int x, int y, int width, int height)
 {
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+    (void)x;
+    (void)y;
+    RLGL.State.framebufferWidth = width;
+    RLGL.State.framebufferHeight = height;
+#else
     glViewport(x, y, width, height);
+#endif
 }
 
 // Set clip planes distances
@@ -1432,7 +1446,7 @@ double rlGetCullDistanceFar(void)
 //----------------------------------------------------------------------------------
 // Module Functions Definition - Vertex level operations
 //----------------------------------------------------------------------------------
-#if defined(GRAPHICS_API_OPENGL_11)
+#if defined(GRAPHICS_API_OPENGL_11) && !defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 // Fallback to OpenGL 1.1 function calls
 //---------------------------------------
 void rlBegin(int mode)
@@ -1456,7 +1470,7 @@ void rlColor4ub(unsigned char r, unsigned char g, unsigned char b, unsigned char
 void rlColor3f(float x, float y, float z) { glColor3f(x, y, z); }
 void rlColor4f(float x, float y, float z, float w) { glColor4f(x, y, z, w); }
 #endif
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 // Initialize drawing mode (how to organize vertex)
 void rlBegin(int mode)
 {
@@ -1648,7 +1662,7 @@ void rlSetTexture(unsigned int id)
 {
     if (id == 0)
     {
-#if defined(GRAPHICS_API_OPENGL_11)
+#if defined(GRAPHICS_API_OPENGL_11) && !defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
         rlDisableTexture();
 #else
         // NOTE: If quads batch limit is reached, force a draw call and next batch starts
@@ -1662,7 +1676,7 @@ void rlSetTexture(unsigned int id)
     }
     else
     {
-#if defined(GRAPHICS_API_OPENGL_11)
+#if defined(GRAPHICS_API_OPENGL_11) && !defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
         rlEnableTexture(id);
 #else
         RLGL.State.currentTextureId = id;
@@ -2083,6 +2097,9 @@ bool rlIsStereoRenderEnabled(void)
 // Clear color buffer with color
 void rlClearColor(unsigned char r, unsigned char g, unsigned char b, unsigned char a)
 {
+#if defined(GRAPHICS_API_DAXA)
+    rdaxaSetClearColor(r, g, b, a);
+#else
     // Color values clamp to 0.0f(0) and 1.0f(255)
     float cr = (float)r/255;
     float cg = (float)g/255;
@@ -2090,13 +2107,16 @@ void rlClearColor(unsigned char r, unsigned char g, unsigned char b, unsigned ch
     float ca = (float)a/255;
 
     glClearColor(cr, cg, cb, ca);
+#endif
 }
 
 // Clear used screen buffers (color and depth)
 void rlClearScreenBuffers(void)
 {
+#if !defined(GRAPHICS_API_DAXA)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);     // Clear used buffers: Color and Depth (Depth is used for 3D)
     //glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);     // Stencil buffer not used...
+#endif
 }
 
 // Check and log OpenGL error codes
@@ -2315,7 +2335,23 @@ void rlglInit(int width, int height)
     RLGL.State.currentMatrix = &RLGL.State.modelview;
 #endif // GRAPHICS_API_OPENGL_33 || GRAPHICS_API_OPENGL_ES2
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+    RLGL.State.defaultTextureId = 1;
+    RLGL.State.currentTextureId = RLGL.State.defaultTextureId;
+    RLGL.defaultBatch = rlLoadRenderBatch(RL_DEFAULT_BATCH_BUFFERS, RL_DEFAULT_BATCH_BUFFER_ELEMENTS);
+    RLGL.currentBatch = &RLGL.defaultBatch;
+
+    for (int i = 0; i < RL_MAX_MATRIX_STACK_SIZE; i++) RLGL.State.stack[i] = rlMatrixIdentity();
+
+    RLGL.State.transform = rlMatrixIdentity();
+    RLGL.State.projection = rlMatrixIdentity();
+    RLGL.State.modelview = rlMatrixIdentity();
+    RLGL.State.currentMatrix = &RLGL.State.modelview;
+    RLGL.State.framebufferWidth = width;
+    RLGL.State.framebufferHeight = height;
+#endif
+
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
     // Initialize software renderer backend
     int result = swInit(width, height);
     if (result == 0)
@@ -2325,6 +2361,7 @@ void rlglInit(int width, int height)
     }
 #endif
 
+#if !defined(GRAPHICS_API_DAXA)
     // Initialize OpenGL default states
     //----------------------------------------------------------
     // Init state: Depth test
@@ -2363,6 +2400,10 @@ void rlglInit(int width, int height)
 
     TRACELOG(RL_LOG_INFO, "RLGL: Default OpenGL state initialized successfully");
     //----------------------------------------------------------
+#else
+    rdaxaSetClearColor(0, 0, 0, 255);
+    TRACELOG(RL_LOG_INFO, "RLGL: Daxa native batch state initialized successfully");
+#endif
 }
 
 // Vertex Buffer Object deinitialization (memory free)
@@ -2377,7 +2418,11 @@ void rlglClose(void)
     TRACELOG(RL_LOG_INFO, "TEXTURE: [ID %i] Default texture unloaded successfully", RLGL.State.defaultTextureId);
 #endif
 
-#if defined(GRAPHICS_API_OPENGL_SOFTWARE) || defined(GRAPHICS_API_DAXA_SOFTWARE_RASTER)
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+    rlUnloadRenderBatch(RLGL.defaultBatch);
+#endif
+
+#if defined(GRAPHICS_API_OPENGL_SOFTWARE)
     swClose(); // Unload sofware renderer resources
 #endif
     isGpuReady = false;
@@ -2790,7 +2835,7 @@ rlRenderBatch rlLoadRenderBatch(int numBuffers, int bufferElements)
     rlRenderBatch batch = { 0 };
     if (!isGpuReady) { TRACELOG(RL_LOG_WARNING, "GL: GPU is not ready to load data, trying to load before InitWindow()?"); return batch; }
 
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
     // Initialize CPU (RAM) vertex buffers (position, texcoord, color data and indexes)
     //--------------------------------------------------------------------------------------------
     batch.vertexBuffer = (rlVertexBuffer *)RL_CALLOC(numBuffers, sizeof(rlVertexBuffer));
@@ -2803,7 +2848,7 @@ rlRenderBatch rlLoadRenderBatch(int numBuffers, int bufferElements)
         batch.vertexBuffer[i].texcoords = (float *)RL_CALLOC(bufferElements*2*4, sizeof(float));    // 2 float by texcoord, 4 texcoord by quad
         batch.vertexBuffer[i].normals = (float *)RL_CALLOC(bufferElements*3*4, sizeof(float));      // 3 float by vertex, 4 vertex by quad
         batch.vertexBuffer[i].colors = (unsigned char *)RL_CALLOC(bufferElements*4*4, sizeof(unsigned char));   // 4 float by color, 4 colors by quad
-#if defined(GRAPHICS_API_OPENGL_33)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
         batch.vertexBuffer[i].indices = (unsigned int *)RL_CALLOC(bufferElements*6, sizeof(unsigned int));      // 6 int by quad (indices)
 #endif
 #if defined(GRAPHICS_API_OPENGL_ES2)
@@ -2836,6 +2881,7 @@ rlRenderBatch rlLoadRenderBatch(int numBuffers, int bufferElements)
     TRACELOG(RL_LOG_INFO, "RLGL: Render batch vertex buffers loaded successfully in RAM (CPU)");
     //--------------------------------------------------------------------------------------------
 
+#if !defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
     // Upload to GPU (VRAM) vertex data and initialize VAOs/VBOs
     //--------------------------------------------------------------------------------------------
     for (int i = 0; i < numBuffers; i++)
@@ -2892,6 +2938,7 @@ rlRenderBatch rlLoadRenderBatch(int numBuffers, int bufferElements)
     // Unbind the current VAO
     if (RLGL.ExtSupported.vao) glBindVertexArray(0);
     //--------------------------------------------------------------------------------------------
+#endif
 
     // Init draw calls tracking system
     //--------------------------------------------------------------------------------------------
@@ -2921,14 +2968,17 @@ rlRenderBatch rlLoadRenderBatch(int numBuffers, int bufferElements)
 // Unload default internal buffers vertex data from CPU and GPU
 void rlUnloadRenderBatch(rlRenderBatch batch)
 {
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+#if !defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
     // Unbind everything
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+#endif
 
     // Unload all vertex buffers data
     for (int i = 0; i < batch.bufferCount; i++)
     {
+#if !defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
         // Unbind VAO attribs data
         if (RLGL.ExtSupported.vao)
         {
@@ -2949,6 +2999,7 @@ void rlUnloadRenderBatch(rlRenderBatch batch)
 
         // Delete VAOs from GPU (VRAM)
         if (RLGL.ExtSupported.vao) glDeleteVertexArrays(1, &batch.vertexBuffer[i].vaoId);
+#endif
 
         // Free vertex arrays memory from CPU (RAM)
         RL_FREE(batch.vertexBuffer[i].vertices);
@@ -2968,6 +3019,53 @@ void rlUnloadRenderBatch(rlRenderBatch batch)
 // NOTE: Batch is reseted and current buffer is updated (for multi-buffer config)
 void rlDrawRenderBatch(rlRenderBatch *batch)
 {
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+    Matrix matMVP = rlMatrixMultiply(RLGL.State.modelview, RLGL.State.projection);
+    rdaxa_DrawCall daxaDraws[RL_DEFAULT_BATCH_DRAWCALLS] = { 0 };
+
+    for (int i = 0; i < batch->drawCounter; i++)
+    {
+        daxaDraws[i].mode = batch->draws[i].mode;
+        daxaDraws[i].vertexCount = batch->draws[i].vertexCount;
+        daxaDraws[i].vertexAlignment = batch->draws[i].vertexAlignment;
+        daxaDraws[i].textureId = batch->draws[i].textureId;
+    }
+
+    rdaxa_BatchData daxaBatch = {
+        .vertices = batch->vertexBuffer[batch->currentBuffer].vertices,
+        .texcoords = batch->vertexBuffer[batch->currentBuffer].texcoords,
+        .colors = batch->vertexBuffer[batch->currentBuffer].colors,
+        .vertexCounter = RLGL.State.vertexCounter,
+        .draws = daxaDraws,
+        .drawCounter = batch->drawCounter,
+        .mvp = rlMatrixToFloat(matMVP),
+        .framebufferWidth = RLGL.State.framebufferWidth,
+        .framebufferHeight = RLGL.State.framebufferHeight,
+    };
+
+    if (!rdaxaDrawBatch(&daxaBatch))
+    {
+        TRACELOG(RL_LOG_WARNING, "DAXA: Failed to draw native render batch");
+    }
+
+    RLGL.State.vertexCounter = 0;
+    batch->currentDepth = -1.0f;
+
+    for (int i = 0; i < RL_DEFAULT_BATCH_DRAWCALLS; i++)
+    {
+        batch->draws[i].mode = RL_QUADS;
+        batch->draws[i].vertexCount = 0;
+        batch->draws[i].vertexAlignment = 0;
+        batch->draws[i].textureId = RLGL.State.defaultTextureId;
+    }
+
+    for (int i = 0; i < RL_DEFAULT_BATCH_MAX_TEXTURE_UNITS; i++) RLGL.State.activeTextureId[i] = 0;
+
+    batch->drawCounter = 1;
+    batch->currentBuffer++;
+    if (batch->currentBuffer >= batch->bufferCount) batch->currentBuffer = 0;
+#endif
+
 #if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
     // Update batch vertex buffers
     //------------------------------------------------------------------------------------------------------------
@@ -3194,7 +3292,7 @@ void rlDrawRenderBatch(rlRenderBatch *batch)
 // Set the active render batch for rlgl
 void rlSetRenderBatchActive(rlRenderBatch *batch)
 {
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
     rlDrawRenderBatch(RLGL.currentBatch);
 
     if (batch != NULL) RLGL.currentBatch = batch;
@@ -3205,7 +3303,7 @@ void rlSetRenderBatchActive(rlRenderBatch *batch)
 // Update and draw internal render batch
 void rlDrawRenderBatchActive(void)
 {
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
     rlDrawRenderBatch(RLGL.currentBatch);    // NOTE: Stereo rendering is checked inside
 #endif
 }
@@ -3216,7 +3314,7 @@ bool rlCheckRenderBatchLimit(int vCount)
 {
     bool overflow = false;
 
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
     if ((RLGL.State.vertexCounter + vCount) >=
         (RLGL.currentBatch->vertexBuffer[RLGL.currentBatch->currentBuffer].elementCount*4))
     {
@@ -3244,6 +3342,19 @@ unsigned int rlLoadTexture(const void *data, int width, int height, int format, 
 {
     unsigned int id = 0;
     if (!isGpuReady) { TRACELOG(RL_LOG_WARNING, "GL: GPU is not ready to load data, trying to load before InitWindow()?"); return id; }
+
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+    (void)data;
+    (void)format;
+    (void)mipmapCount;
+
+    if ((width > 0) && (height > 0)) id = RLGLDaxaNextTextureId++;
+
+    if (id > 0) TRACELOG(RL_LOG_INFO, "TEXTURE: [ID %i] Daxa texture handle allocated (%ix%i)", id, width, height);
+    else TRACELOG(RL_LOG_WARNING, "TEXTURE: Failed to allocate Daxa texture handle");
+
+    return id;
+#endif
 
     glBindTexture(GL_TEXTURE_2D, 0);    // Free any old binding
 
@@ -3585,6 +3696,17 @@ unsigned int rlLoadTextureCubemap(const void *data, int size, int format, int mi
 // WARNING: Not possible to know safely if internal texture format is the expected one...
 void rlUpdateTexture(unsigned int id, int offsetX, int offsetY, int width, int height, int format, const void *data)
 {
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+    (void)id;
+    (void)offsetX;
+    (void)offsetY;
+    (void)width;
+    (void)height;
+    (void)format;
+    (void)data;
+    return;
+#endif
+
     glBindTexture(GL_TEXTURE_2D, id);
 
     unsigned int glInternalFormat, glFormat, glType;
@@ -3673,6 +3795,11 @@ void rlGetGlTextureFormats(int format, unsigned int *glInternalFormat, unsigned 
 // Unload texture from GPU memory
 void rlUnloadTexture(unsigned int id)
 {
+#if defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
+    (void)id;
+    return;
+#endif
+
     glDeleteTextures(1, &id);
 }
 
@@ -5301,7 +5428,7 @@ static Matrix rlMatrixIdentity(void)
 
     return matIdentity;
 }
-#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2)
+#if defined(GRAPHICS_API_OPENGL_33) || defined(GRAPHICS_API_OPENGL_ES2) || defined(GRAPHICS_API_DAXA_NATIVE_BATCH)
 // Get float array of matrix data
 // Explicit conversion to column-major memory layout
 static rl_float16 rlMatrixToFloatV(Matrix mat)

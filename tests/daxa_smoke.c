@@ -3,8 +3,8 @@
 *   raylib Daxa smoke test
 *
 *   This test verifies that a Daxa-configured raylib build can create a window,
-*   draw a few frames through the software renderer, and successfully present
-*   them through the Daxa swapchain.
+*   draw a few frames through rlgl's Daxa native batch path, and successfully
+*   present them through the Daxa swapchain.
 *
 **********************************************************************************************/
 
