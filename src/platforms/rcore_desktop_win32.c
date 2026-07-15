@@ -2012,7 +2012,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpara
         }
         case WM_INPUT:
         {
-            //HandleRawInput(lparam);
+            if (CORE.Input.Mouse.cursorLocked) HandleRawInput(lparam);
         } break;
         case WM_MOUSEMOVE:
         {
@@ -2101,6 +2101,8 @@ static void HandleMouseButton(int button, char state)
 // Handle raw input event
 static void HandleRawInput(LPARAM lparam)
 {
+    if (!CORE.Input.Mouse.cursorLocked) return;
+
     RAWINPUT input = { 0 };
     UINT inputSize = 0;
 
@@ -2109,20 +2111,35 @@ static void HandleRawInput(LPARAM lparam)
 
     UINT size = GetRawInputData((HRAWINPUT)lparam, RID_INPUT, &input, &inputSize, sizeof(RAWINPUTHEADER));
 
-    if (size == (UINT)-1) TRACELOG(LOG_ERROR, "WIN32: Failed to get raw input data [ERROR: %lu]", GetLastError());
+    if (size == (UINT)-1)
+    {
+        TRACELOG(LOG_ERROR, "WIN32: Failed to get raw input data [ERROR: %lu]", GetLastError());
+        return;
+    }
 
-    if (input.header.dwType != RIM_TYPEMOUSE) TRACELOG(LOG_ERROR, "WIN32: Unexpected WM_INPUT type %lu", input.header.dwType);
+    if (input.header.dwType != RIM_TYPEMOUSE)
+    {
+        TRACELOG(LOG_ERROR, "WIN32: Unexpected WM_INPUT type %lu", input.header.dwType);
+        return;
+    }
 
-    if (input.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) TRACELOG(LOG_ERROR, "TODO: handle absolute mouse inputs!");
+    if (input.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)
+    {
+        TRACELOG(LOG_WARNING, "WIN32: Absolute raw mouse input is not supported");
+        return;
+    }
 
-    if (input.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP) TRACELOG(LOG_ERROR, "TODO: handle virtual desktop mouse inputs!");
+    if (input.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP)
+    {
+        TRACELOG(LOG_WARNING, "WIN32: Virtual desktop raw mouse input is not supported");
+        return;
+    }
 
     // Trick to keep the mouse position at (0,0) and instead move
     // the previous position so a proper mouse delta can still be retrieved
-    //CORE.Input.Mouse.previousPosition.x -= input.data.mouse.lLastX;
-    //CORE.Input.Mouse.previousPosition.y -= input.data.mouse.lLastY;
-    //if (CORE.Input.Mouse.currentPosition.x != 0) abort();
-    //if (CORE.Input.Mouse.currentPosition.y != 0) abort();
+    CORE.Input.Mouse.previousPosition.x -= (float)input.data.mouse.lLastX;
+    CORE.Input.Mouse.previousPosition.y -= (float)input.data.mouse.lLastY;
+    CORE.Input.Touch.position[0] = CORE.Input.Mouse.currentPosition;
 }
 
 // Handle window resizing event
